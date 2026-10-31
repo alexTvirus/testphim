@@ -103,7 +103,11 @@
 <script>
 
 let playlist = [
-		{ "message": "OK", "title": "phim wasabi", "label": "Auto", "type": "hls", "file": "https://srv315.noundemnitier.cyou/aes/0/1844f3f54e113d2f6dd733e997f76d5446aaca0205febcb970a5a9b1ca681d5d/zscIPUjfKU7upiVsCSdYRA/1793548209/storage2/movies/wasabi-2001/8d2b9cb1b20f51b8355b1f4b48190773.mp4/index.m3u8", "sub": "" },
+		{ "message": "OK", "title": "thu thuat 1-556", "label": "Auto", "type": "hls","remoteBase":"https://hs-vod2.nimo.tv/e5fe88bbvodtransth1256238590/0d387d625001834826358704256/" , "file": "xxx.m3u8", "sub": "" },
+
+		// Ví dụ: đọc nội dung .m3u8 từ file local ("x.m3u8", cùng thư mục với trang HTML),
+		// nhưng khi phát thì các segment (.ts) sẽ được ghép với domain thật ở "remoteBase".
+		// { "title": "demo remote base", "file": "x.m3u8", "remoteBase": "https://abc.com/path/to/", "sub": "" },
 
 		]
 
@@ -130,6 +134,15 @@ let playlist = [
 			const playlistContainer = document.getElementById("playlist");
 				let currentIndex = 0;
 
+				// Các header tùy chỉnh sẽ được gắn vào MỌI request mà hls.js gửi đi
+				// (manifest .m3u8, các playlist con, và từng segment .ts/.m4s).
+				// Sửa trực tiếp ở đây, ví dụ:
+				// const CUSTOM_HEADERS = { "Referer": "https://example.com/", "X-Api-Key": "abc123" };
+				const CUSTOM_HEADERS = {
+					// "Referer": "https://example.com/",
+					// "Authorization": "Bearer xxxxx",
+				};
+
 				var config = {
 					// Thời gian tối đa của bộ đệm (tính bằng giây)
 					maxBufferLength: 300, // Đặt đủ lớn để chứa ít nhất 2 đoạn .ts (ví dụ: 2 x 10 giây)
@@ -139,6 +152,13 @@ let playlist = [
 					autoStartLoad: true,
 					// Số lượng tối đa các đoạn được tải trước cùng lúc
 					maxBufferSize: 100 * 1000 * 1000, // 60MB - Giới hạn kích thước bộ đệm (tùy chỉnh nếu cần)
+					// Gắn header tùy chỉnh vào mỗi request (manifest + level + fragment)
+					// Chỉ áp dụng cho loader mặc định dùng XMLHttpRequest.
+					xhrSetup: function (xhr, url) {
+						Object.keys(CUSTOM_HEADERS).forEach(function (key) {
+							xhr.setRequestHeader(key, CUSTOM_HEADERS[key]);
+						});
+					},
 				  };
 
 				 const hls = new Hls(config);
@@ -180,21 +200,90 @@ let playlist = [
 
 
 
+/* ========================================================================
+   Đọc nội dung .m3u8 (local hoặc remote) và viết lại các dòng URI tương đối
+   (segment .ts, playlist con trong master .m3u8, EXT-X-KEY, EXT-X-MAP...)
+   thành URL tuyệt đối theo "baseUrl" chỉ định, thay vì theo vị trí file gốc.
+   ======================================================================== */
+function rewriteM3u8Base(m3u8Text, baseUrl) {
+	if (!baseUrl.endsWith('/')) baseUrl += '/';
+
+	function resolveUri(uri) {
+		uri = uri.trim();
+		if (!uri || /^https?:\/\//i.test(uri)) return uri; // đã là URL tuyệt đối thì giữ nguyên
+		if (uri.startsWith('/')) {
+			// Đường dẫn tuyệt đối theo domain -> ghép với origin của baseUrl
+			const originMatch = baseUrl.match(/^(https?:\/\/[^/]+)/i);
+			return originMatch ? originMatch[1] + uri : uri;
+		}
+		return baseUrl + uri;
+	}
+
+	const lines = m3u8Text.split('\n');
+	const result = lines.map(line => {
+		const trimmed = line.trim();
+		if (!trimmed) return line;
+
+		if (!trimmed.startsWith('#')) {
+			// Dòng URI của segment hoặc playlist con (không phải dòng thẻ #EXT-...)
+			return resolveUri(trimmed);
+		}
+
+		// Các thẻ có chứa URI="..." (ví dụ #EXT-X-KEY, #EXT-X-MAP, #EXT-X-MEDIA)
+		if (/URI="/.test(trimmed)) {
+			return trimmed.replace(/URI="([^"]*)"/, (m, uri) => 'URI="' + resolveUri(uri) + '"');
+		}
+
+		return line;
+	});
+
+	return result.join('\n');
+}
+
+// Load 1 file .m3u8 bằng cách fetch nội dung thật, rewrite URI theo baseUrl,
+// rồi đưa cho hls.js qua Blob URL (hls.js không cần biết file gốc nằm ở đâu).
+function loadManifestWithRemoteBase(manifestUrl, baseUrl) {
+	fetch(manifestUrl)
+		.then(res => {
+			if (!res.ok) throw new Error('HTTP ' + res.status);
+			return res.text();
+		})
+		.then(text => {
+			const rewritten = rewriteM3u8Base(text, baseUrl);
+			const blob = new Blob([rewritten], { type: 'application/vnd.apple.mpegurl' });
+			const blobUrl = URL.createObjectURL(blob);
+			hls.loadSource(blobUrl);
+			hls.attachMedia(player);
+			renderPlaylist();
+		})
+		.catch(err => {
+			console.error('Không đọc được file .m3u8 local:', err);
+		});
+}
+
 function loadVideo(index){
+	const item = playlist[index];
+
 	if (Hls.isSupported()) {
-	  hls.loadSource(
-		playlist[index]['file']
-	  );
-	  hls.attachMedia(player);
-	  renderPlaylist()
+	  if (item['remoteBase']) {
+		  // File .m3u8 đọc từ local (hoặc 1 URL khác), nhưng segment ghép theo remoteBase
+		  loadManifestWithRemoteBase(item['file'], item['remoteBase']);
+	  } else {
+		  hls.loadSource(item['file']);
+		  hls.attachMedia(player);
+		  renderPlaylist();
+	  }
 	} else {
 
 	}
 
 	// Nếu mục trong playlist có khai báo sẵn link phụ đề (.srt hoặc .vtt), tự load luôn
 	const subUrl = playlist[index] && playlist[index]['sub'];
-	clearSubtitle();
-	loadSubtitleFromUrl(subUrl);
+	if (subUrl) {
+		loadSubtitleFromUrl(subUrl);
+	} else {
+		clearSubtitle();
+	}
 }
 
 /* ========================================================================
@@ -244,7 +333,6 @@ function loadSubtitleFromSrtText(srtText, label) {
 
 // Nạp phụ đề từ 1 URL (.srt hoặc .vtt online, dùng cho field "sub" trong playlist)
 function loadSubtitleFromUrl(url) {
-	url = "https://script.google.com/macros/s/AKfycbwYvvivgy9hHDmwGGa0C5GulG5qHno5AiGe1W-ud1taiOjj6_0iFuX__YDLshQx9iQ/exec?ggid=1EY_dI-jTQKtrcXYJnhwdkY9Zmao6WT6R"
 	fetch(url)
 		.then(res => {
 			if (!res.ok) throw new Error('HTTP ' + res.status);
