@@ -2,9 +2,8 @@
 <html>
 
 <head>
-	<script src="hls.js"></script>
+	<meta charset="UTF-8">
 	<link crossorigin="anonymous" media="all" rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0-beta.2/css/bootstrap.min.css">
-
 </head>
 
 <body>
@@ -16,8 +15,6 @@
 			justify-content: space-between;
 			padding-top: 10px;
 		}
-
-
 
 	#playlist {
 			width: fit-content;
@@ -44,392 +41,87 @@
 			background-color: #f0f0f0;
 		}
 
-		/* ===== Subtitle controls ===== */
-		#subtitle-bar {
+		/* Khung bọc iframe để giữ tỉ lệ 16:9, responsive */
+		#player-wrapper {
+			position: relative;
 			width: 100%;
-			display: flex;
-			flex-wrap: wrap;
-			align-items: center;
-			gap: 10px;
-			padding: 8px 0;
+			padding-top: 56.25%; /* 16:9 */
+			background: #000;
 		}
 
-		#subtitle-bar label.btn {
-			margin-bottom: 0;
-		}
-
-		#sub-status {
-			font-size: 13px;
-			color: #555;
-		}
-
-		/* Make the native subtitle cues a bit nicer and keep <i> italics working */
-		video::cue {
-			background-color: rgba(0, 0, 0, 0.6);
-			color: #fff;
-			font-size: 1.1em;
-			line-height: 1.4;
-		}
-
-		video::cue(i) {
-			font-style: italic;
+		#player-wrapper iframe {
+			position: absolute;
+			top: 0;
+			left: 0;
+			width: 100%;
+			height: 100%;
+			border: 0;
 		}
 </style>
 <script src="https://cdn.tailwindcss.com"></script>
 <div class="container">
-<video id="player" controls autoplay  playsinline="" class="videoCentered" style="width: 100%" >
-	<track id="subtitleTrack" kind="subtitles" label="Phụ đề" srclang="vi" default>
-</video>
 
-<div id="subtitle-bar">
-	<label class="btn btn-sm btn-secondary" style="margin:0;">
-		Chọn file .srt
-		<input type="file" id="srtFileInput" accept=".srt" style="display:none;">
-	</label>
-
-	<input type="text" id="srtUrlInput" class="form-control form-control-sm" style="width:260px;" placeholder="http://sub.com/1.srt">
-	<button id="loadSubUrlBtn" class="btn btn-sm btn-primary" type="button">Nạp phụ đề từ URL</button>
-
-	<button id="toggleSubBtn" class="btn btn-sm btn-outline-secondary" type="button">Tắt phụ đề</button>
-	<span id="sub-status"></span>
-</div>
+	<div id="player-wrapper">
+		<iframe id="player"
+			src=""
+			allow="autoplay; fullscreen; picture-in-picture"
+			allowfullscreen>
+		</iframe>
+	</div>
 
 	<div id="playlist">
 
-		</div>
+	</div>
 </div>
 
 
 <script>
 
+// Vì phụ đề đã được gắn cứng (burn-in) sẵn vào video trước khi upload,
+// nên ở đây không cần xử lý .srt/.vtt gì nữa — chỉ cần đổi link embed.
 let playlist = [
-		{ "message": "OK", "title": "thu thuat 1-556", "label": "Auto", "type": "hls","remoteBase":"https://hs-vod2.nimo.tv/e5fe88bbvodtransth1256238590/0d387d625001834826358704256/" , "file": "xxx.m3u8", "sub": "" },
+		{ "title": "thu thuat 1-556", "embed": "https://www.nimo.tv/embed/v-1880626764375786055" },
+		// Thêm các mục khác ở đây, mỗi mục là 1 link embed khác nhau:
+		// { "title": "video khác", "embed": "https://www.nimo.tv/embed/v-xxxxxxxxxxxxxxxx" },
+	]
 
-		// Ví dụ: đọc nội dung .m3u8 từ file local ("x.m3u8", cùng thư mục với trang HTML),
-		// nhưng khi phát thì các segment (.ts) sẽ được ghép với domain thật ở "remoteBase".
-		// { "title": "demo remote base", "file": "x.m3u8", "remoteBase": "https://abc.com/path/to/", "sub": "" },
+	const playlistContainer = document.getElementById("playlist");
+	const playerFrame = document.getElementById("player");
+	let currentIndex = 0;
 
-		]
+	function renderPlaylist() {
+		playlistContainer.innerHTML = "";
+		playlist.forEach((video, index) => {
+			const item = document.createElement("div");
+			item.className = "playlist-item" + (index === currentIndex ? " active" : "");
+			item.innerHTML = `
+				<strong>${video.title}</strong>
+				<p>${video.embed}</p>
+			`;
+			item.addEventListener("click", () => {
+				currentIndex = index;
+				loadVideo(currentIndex);
+			});
+			playlistContainer.appendChild(item);
+		});
+	}
 
-		function renderPlaylist() {
-				playlistContainer.innerHTML = "";
-				playlist.forEach((video, index) => {
-					const item = document.createElement("div");
-					item.className = "playlist-item" + (index === currentIndex ? " active" : "");
-					item.innerHTML = `
-					<strong>${video.title}</strong>
-					<p>${video.file}</p>
-				`
-					item.addEventListener("click", () => {
-						currentIndex = index;
-						loadVideo(currentIndex);
-					});
-					playlistContainer.appendChild(item);
-				});
-			}
+	function loadVideo(index) {
+		const item = playlist[index];
+		if (!item) return;
 
-			let player = document.querySelector('#player');
-
-
-			const playlistContainer = document.getElementById("playlist");
-				let currentIndex = 0;
-
-				// Các header tùy chỉnh sẽ được gắn vào MỌI request mà hls.js gửi đi
-				// (manifest .m3u8, các playlist con, và từng segment .ts/.m4s).
-				// Sửa trực tiếp ở đây, ví dụ:
-				// const CUSTOM_HEADERS = { "Referer": "https://example.com/", "X-Api-Key": "abc123" };
-				const CUSTOM_HEADERS = {
-					// "Referer": "https://example.com/",
-					// "Authorization": "Bearer xxxxx",
-				};
-
-				var config = {
-					// Thời gian tối đa của bộ đệm (tính bằng giây)
-					maxBufferLength: 300, // Đặt đủ lớn để chứa ít nhất 2 đoạn .ts (ví dụ: 2 x 10 giây)
-					// Giới hạn tối đa của bộ đệm khi đầy
-					maxMaxBufferLength: 700, // Đảm bảo không vượt quá quá nhiều
-					// Bắt đầu tải ngay khi có dữ liệu
-					autoStartLoad: true,
-					// Số lượng tối đa các đoạn được tải trước cùng lúc
-					maxBufferSize: 100 * 1000 * 1000, // 60MB - Giới hạn kích thước bộ đệm (tùy chỉnh nếu cần)
-					// Gắn header tùy chỉnh vào mỗi request (manifest + level + fragment)
-					// Chỉ áp dụng cho loader mặc định dùng XMLHttpRequest.
-					xhrSetup: function (xhr, url) {
-						Object.keys(CUSTOM_HEADERS).forEach(function (key) {
-							xhr.setRequestHeader(key, CUSTOM_HEADERS[key]);
-						});
-					},
-				  };
-
-				 const hls = new Hls(config);
-
+		// Đổi src của iframe để chuyển sang video embed khác.
+		// Lưu ý: vì đây là nội dung nhúng từ domain khác (nimo.tv),
+		// không thể dùng JS để điều khiển play/pause/seek hay biết trạng thái
+		// phát của video bên trong iframe (giới hạn Same-Origin Policy).
+		playerFrame.src = item.embed;
+		renderPlaylist();
+	}
 
 	document.addEventListener("DOMContentLoaded", function () {
-
-
-		 hls.on(Hls.Events.MANIFEST_PARSED, function () {
-		    player.play().then(() => {
-			console.log('HLS autoplay thành công.');
-		  }).catch((error) => {
-			console.warn('HLS autoplay bị chặn:', error);
-		  });
-		  });
-
-		// Hook lỗi
-		hls.on(Hls.Events.ERROR, (event, data) => {
-		  if (data.details === Hls.ErrorDetails.INTERNAL_ABORTED) {
-				console.warn("Fragment loading was canceled:", data);
-			  } else {
-				console.error("HLS.js Error:", data);
-			  }
-		});
-
-		hls.on(Hls.Events.BUFFER_EOS, () => {
-			currentIndex = ++currentIndex%(playlist.length)
-			loadVideo(currentIndex);
-		});
-
-		loadVideo(0)
-
-		setupSubtitleControls();
-
-
-	})
-
-
-
-
-
-/* ========================================================================
-   Đọc nội dung .m3u8 (local hoặc remote) và viết lại các dòng URI tương đối
-   (segment .ts, playlist con trong master .m3u8, EXT-X-KEY, EXT-X-MAP...)
-   thành URL tuyệt đối theo "baseUrl" chỉ định, thay vì theo vị trí file gốc.
-   ======================================================================== */
-function rewriteM3u8Base(m3u8Text, baseUrl) {
-	if (!baseUrl.endsWith('/')) baseUrl += '/';
-
-	function resolveUri(uri) {
-		uri = uri.trim();
-		if (!uri || /^https?:\/\//i.test(uri)) return uri; // đã là URL tuyệt đối thì giữ nguyên
-		if (uri.startsWith('/')) {
-			// Đường dẫn tuyệt đối theo domain -> ghép với origin của baseUrl
-			const originMatch = baseUrl.match(/^(https?:\/\/[^/]+)/i);
-			return originMatch ? originMatch[1] + uri : uri;
-		}
-		return baseUrl + uri;
-	}
-
-	const lines = m3u8Text.split('\n');
-	const result = lines.map(line => {
-		const trimmed = line.trim();
-		if (!trimmed) return line;
-
-		if (!trimmed.startsWith('#')) {
-			// Dòng URI của segment hoặc playlist con (không phải dòng thẻ #EXT-...)
-			return resolveUri(trimmed);
-		}
-
-		// Các thẻ có chứa URI="..." (ví dụ #EXT-X-KEY, #EXT-X-MAP, #EXT-X-MEDIA)
-		if (/URI="/.test(trimmed)) {
-			return trimmed.replace(/URI="([^"]*)"/, (m, uri) => 'URI="' + resolveUri(uri) + '"');
-		}
-
-		return line;
+		loadVideo(0);
 	});
-
-	return result.join('\n');
-}
-
-// Load 1 file .m3u8 bằng cách fetch nội dung thật, rewrite URI theo baseUrl,
-// rồi đưa cho hls.js qua Blob URL (hls.js không cần biết file gốc nằm ở đâu).
-function loadManifestWithRemoteBase(manifestUrl, baseUrl) {
-	fetch(manifestUrl)
-		.then(res => {
-			if (!res.ok) throw new Error('HTTP ' + res.status);
-			return res.text();
-		})
-		.then(text => {
-			const rewritten = rewriteM3u8Base(text, baseUrl);
-			const blob = new Blob([rewritten], { type: 'application/vnd.apple.mpegurl' });
-			const blobUrl = URL.createObjectURL(blob);
-			hls.loadSource(blobUrl);
-			hls.attachMedia(player);
-			renderPlaylist();
-		})
-		.catch(err => {
-			console.error('Không đọc được file .m3u8 local:', err);
-		});
-}
-
-function loadVideo(index){
-	const item = playlist[index];
-
-	if (Hls.isSupported()) {
-	  if (item['remoteBase']) {
-		  // File .m3u8 đọc từ local (hoặc 1 URL khác), nhưng segment ghép theo remoteBase
-		  loadManifestWithRemoteBase(item['file'], item['remoteBase']);
-	  } else {
-		  hls.loadSource(item['file']);
-		  hls.attachMedia(player);
-		  renderPlaylist();
-	  }
-	} else {
-
-	}
-
-	// Nếu mục trong playlist có khai báo sẵn link phụ đề (.srt hoặc .vtt), tự load luôn
-	const subUrl = playlist[index] && playlist[index]['sub'];
-	if (subUrl) {
-		loadSubtitleFromUrl(subUrl);
-	} else {
-		clearSubtitle();
-	}
-}
-
-/* ========================================================================
-   SUBTITLE (.srt) SUPPORT
-   Thẻ <track> của HTML5 chỉ hiểu định dạng WebVTT (.vtt), không hiểu .srt
-   trực tiếp, nên ta cần convert nội dung .srt -> .vtt rồi nạp bằng Blob URL.
-   ======================================================================== */
-
-let currentSubtitleBlobUrl = null; // để revoke khi đổi phụ đề khác, tránh rò rỉ bộ nhớ
-let subtitlesEnabled = true;
-
-// Chuyển nội dung .srt thành .vtt
-function srtToVtt(srtContent) {
-	let content = srtContent.replace(/\r+/g, ''); // bỏ ký tự \r (CRLF -> LF)
-
-	// Timestamp trong .srt dùng dấu phẩy cho phần mili-giây (00:01:02,500)
-	// trong khi .vtt bắt buộc dùng dấu chấm (00:01:02.500)
-	content = content.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
-
-	return 'WEBVTT\n\n' + content.trim() + '\n';
-}
-
-// Nạp phụ đề từ nội dung .srt dạng text (dùng chung cho file local và link online)
-function loadSubtitleFromSrtText(srtText, label) {
-	const vttText = srtToVtt(srtText);
-	const blob = new Blob([vttText], { type: 'text/vtt' });
-	const url = URL.createObjectURL(blob);
-
-	if (currentSubtitleBlobUrl) {
-		URL.revokeObjectURL(currentSubtitleBlobUrl); // dọn URL cũ
-	}
-	currentSubtitleBlobUrl = url;
-
-	const track = document.getElementById('subtitleTrack');
-	track.src = url;
-	track.label = label || 'Phụ đề';
-
-	// Chờ track load xong rồi bật chế độ hiển thị
-	track.onload = () => {
-		applySubtitleVisibility();
-	};
-	// Một số trình duyệt không bắn 'load' cho <track> đáng tin cậy, nên set luôn textTracks sau một nhịp
-	setTimeout(applySubtitleVisibility, 150);
-
-	document.getElementById('sub-status').textContent = 'Đã nạp phụ đề: ' + (label || '');
-}
-
-// Nạp phụ đề từ 1 URL (.srt hoặc .vtt online, dùng cho field "sub" trong playlist)
-function loadSubtitleFromUrl(url) {
-	fetch(url)
-		.then(res => {
-			if (!res.ok) throw new Error('HTTP ' + res.status);
-			return res.text();
-		})
-		.then(text => {
-			if (url.toLowerCase().endsWith('.vtt') || /^\s*WEBVTT/.test(text)) {
-				// Đã là VTT sẵn rồi thì không cần convert
-				const blob = new Blob([text], { type: 'text/vtt' });
-				const blobUrl = URL.createObjectURL(blob);
-				if (currentSubtitleBlobUrl) URL.revokeObjectURL(currentSubtitleBlobUrl);
-				currentSubtitleBlobUrl = blobUrl;
-
-				const track = document.getElementById('subtitleTrack');
-				track.src = blobUrl;
-				setTimeout(applySubtitleVisibility, 150);
-				document.getElementById('sub-status').textContent = 'Đã nạp phụ đề online';
-			} else {
-				loadSubtitleFromSrtText(text, 'Phụ đề online');
-			}
-		})
-		.catch(err => {
-			console.warn('Không tải được phụ đề:', err);
-			document.getElementById('sub-status').textContent = 'Không tải được phụ đề online';
-		});
-}
-
-function clearSubtitle() {
-	const track = document.getElementById('subtitleTrack');
-	if (currentSubtitleBlobUrl) {
-		URL.revokeObjectURL(currentSubtitleBlobUrl);
-		currentSubtitleBlobUrl = null;
-	}
-	track.removeAttribute('src');
-	document.getElementById('sub-status').textContent = '';
-}
-
-function applySubtitleVisibility() {
-	const textTracks = player.textTracks;
-	if (!textTracks || textTracks.length === 0) return;
-	for (let i = 0; i < textTracks.length; i++) {
-		textTracks[i].mode = subtitlesEnabled ? 'showing' : 'hidden';
-	}
-}
-
-function setupSubtitleControls() {
-	const fileInput = document.getElementById('srtFileInput');
-	const toggleBtn = document.getElementById('toggleSubBtn');
-
-	fileInput.addEventListener('change', function (e) {
-		const file = e.target.files[0];
-		if (!file) return;
-
-		const reader = new FileReader();
-		reader.onload = function (evt) {
-			subtitlesEnabled = true;
-			toggleBtn.textContent = 'Tắt phụ đề';
-			loadSubtitleFromSrtText(evt.target.result, file.name);
-		};
-		reader.onerror = function () {
-			document.getElementById('sub-status').textContent = 'Lỗi đọc file .srt';
-		};
-		// Đọc file .srt dạng text. Nếu file bị lỗi font (không phải UTF-8),
-		// có thể thử đổi 'UTF-8' thành 'windows-1258' hoặc 'UTF-16' tùy nguồn phụ đề.
-		reader.readAsText(file, 'UTF-8');
-	});
-
-	toggleBtn.addEventListener('click', function () {
-		subtitlesEnabled = !subtitlesEnabled;
-		toggleBtn.textContent = subtitlesEnabled ? 'Tắt phụ đề' : 'Bật phụ đề';
-		applySubtitleVisibility();
-	});
-
-	const urlInput = document.getElementById('srtUrlInput');
-	const loadUrlBtn = document.getElementById('loadSubUrlBtn');
-
-	function loadFromUrlInput() {
-		const url = urlInput.value.trim();
-		if (!url) {
-			document.getElementById('sub-status').textContent = 'Vui lòng nhập URL phụ đề';
-			return;
-		}
-		subtitlesEnabled = true;
-		toggleBtn.textContent = 'Tắt phụ đề';
-		document.getElementById('sub-status').textContent = 'Đang tải phụ đề...';
-		loadSubtitleFromUrl(url);
-	}
-
-	loadUrlBtn.addEventListener('click', loadFromUrlInput);
-	// Cho phép nhấn Enter trong ô nhập URL thay vì phải bấm nút
-	urlInput.addEventListener('keydown', function (e) {
-		if (e.key === 'Enter') {
-			e.preventDefault();
-			loadFromUrlInput();
-		}
-	});
-}
 
 </script>
+</body>
 </html>
